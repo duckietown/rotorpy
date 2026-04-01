@@ -44,6 +44,9 @@ class PX4Multirotor(Multirotor):
         quad_params (dict): Quadrotor parameters.
         initial_state (dict, optional): Initial state of the quadrotor.
         autopilot_controller (bool): Whether to use the autopilot controller or not.
+        integrator_kwargs (dict, optional): Keyword arguments for scipy.integrate.solve_ivp.
+        custom_integrator (callable, optional): Custom integrator function with signature f(s_dot_fn, s, t_step) -> s_next.
+                                                Use this for high-performance fixed-step integration (e.g., RK4).
     """
     def __init__(
         self,
@@ -55,7 +58,8 @@ class PX4Multirotor(Multirotor):
         mavlink_url="tcpin:localhost:4560",
         autopilot_controller=True,
         lockstep=True,
-        integrator_kwargs=None
+        integrator_kwargs=None,
+        custom_integrator=None
     ):
         integrator_kwargs = integrator_kwargs if integrator_kwargs is not None else {'method':'RK45', 'rtol':1e-2, 'atol':1e-4, 'max_step':0.05}
         # If no initial state passed, initialize to hover at origin
@@ -74,7 +78,8 @@ class PX4Multirotor(Multirotor):
             control_abstraction=control_abstraction,
             aero=aero,
             enable_ground=enable_ground,
-            integrator_kwargs=integrator_kwargs
+            integrator_kwargs=integrator_kwargs,
+            custom_integrator=custom_integrator
         )
         # Simulated IMU (with noise)
         self.imu = Imu()

@@ -85,7 +85,9 @@ class Multirotor(object):
                                 'cmd_acc': the controller commands a mass normalized thrust vector (acceleration) in the world frame.
         aero: boolean, determines whether or not aerodynamic drag forces are computed. 
         enable_ground: boolean, determines whether or not ground contact is enabled.
-        integrator_kwargs: dictionary of keyword arguments passed to scipy.integrate.solve_ivp
+        integrator_kwargs: dictionary of keyword arguments passed to scipy.integrate.solve_ivp (ignored if custom_integrator is provided)
+        custom_integrator: callable with signature f(s_dot_fn, s, t_step) -> s_next, where s_dot_fn is the dynamics function,
+                          s is the current state vector, and t_step is the time step. If None, uses scipy.integrate.solve_ivp.
     """
     def __init__(self, quad_params, initial_state = {'x': np.array([0,0,0]),
                                             'v': np.zeros(3,),
@@ -97,6 +99,7 @@ class Multirotor(object):
                        aero = True,
                        enable_ground = False,
                        integrator_kwargs = None,
+                       custom_integrator = None,
                 ):
         """
         Initialize quadrotor physical parameters.
@@ -185,6 +188,21 @@ class Multirotor(object):
         else:
             self.integrator_kwargs = integrator_kwargs
 
+        # Set up the integrator function
+        if custom_integrator is None:
+            # Default: use scipy.integrate.solve_ivp
+            def default_integrator(s_dot_fn, s, t_step):
+                sol = scipy.integrate.solve_ivp(
+                    s_dot_fn,
+                    (0.0, t_step),
+                    s,
+                    **self.integrator_kwargs
+                )
+                return sol['y'][:, -1]
+            self.integrator = default_integrator
+        else:
+            self.integrator = custom_integrator
+
     def extract_geometry(self):
         """
         Extracts the geometry in self.rotors for efficient use later on in the computation of 
@@ -238,14 +256,8 @@ class Multirotor(object):
             return self._s_dot_fn(t, s, cmd_rotor_speeds)
         s = Multirotor._pack_state(state)
 
-        # Integrate
-        sol = scipy.integrate.solve_ivp(
-            s_dot_fn,
-            (0.0, t_step),
-            s,
-            **self.integrator_kwargs
-        )
-        s = sol['y'][:, -1]
+        # Integrate using the configured integrator
+        s = self.integrator(s_dot_fn, s, t_step)
 
         # Unpack the state vector.
         state = Multirotor._unpack_state(s)
