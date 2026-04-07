@@ -57,6 +57,7 @@ class PX4Multirotor(Multirotor):
         mavlink_url="tcpin:localhost:4560",
         autopilot_controller=True,
         lockstep=True,
+        lockstep_timeout=0.002,
         integrator_kwargs=None
     ):
         integrator_kwargs = integrator_kwargs if integrator_kwargs is not None else {'method':'RK45', 'rtol':1e-2, 'atol':1e-4, 'max_step':0.05}
@@ -79,11 +80,12 @@ class PX4Multirotor(Multirotor):
             integrator_kwargs=integrator_kwargs
         )
         # Use fixed-step RK4 for faster physics (7x vs solve_ivp, identical accuracy at dt<=4ms)
-        self.use_fixed_step = False
+        self.use_fixed_step = True
         # Simulated IMU (with noise)
         self.imu = Imu()
         self._enable_imu_noise = True  # Always add a bit of noise to avoid stale detection
         self.t = 0.0
+
 
         print("PX4Multirotor: Initializing MAVLink connection... on {}".format(mavlink_url))
         self.conn = mavutil.mavlink_connection(mavlink_url)
@@ -92,6 +94,7 @@ class PX4Multirotor(Multirotor):
 
         self._autopilot_controller = autopilot_controller
         self._lockstep_enabled = lockstep
+        self._lockstep_timeout = lockstep_timeout
         self._last_control = {'cmd_motor_speeds': np.zeros(quad_params['num_rotors'])}
 
     @staticmethod
@@ -177,9 +180,11 @@ class PX4Multirotor(Multirotor):
             if msg is None:
                 break
             latest = msg
-        # If no message found and blocking requested, do a short blocking wait
+        # If no message found and blocking requested, poll with retry until timeout
         if latest is None and blocking:
-            latest = self.conn.recv_match(type='HIL_ACTUATOR_CONTROLS', blocking=True, timeout=0.002)
+            deadline = time.perf_counter() + self._lockstep_timeout
+            while latest is None and time.perf_counter() < deadline:
+                latest = self.conn.recv_match(type='HIL_ACTUATOR_CONTROLS', blocking=True, timeout=0.01)
         if latest is not None:
             return {'cmd_motor_speeds': [c * self.rotor_speed_max for c in latest.controls[:self.num_rotors]]}
 
