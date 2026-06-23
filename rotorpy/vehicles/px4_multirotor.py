@@ -53,6 +53,7 @@ class PX4Multirotor(Multirotor):
         initial_state=None,
         control_abstraction="cmd_motor_speeds",
         aero=True,
+        enable_imu_noise=True,
         enable_ground=True,
         mavlink_url="tcpin:localhost:4560",
         autopilot_controller=True,
@@ -81,9 +82,9 @@ class PX4Multirotor(Multirotor):
         )
         # Use fixed-step RK4 for faster physics (7x vs solve_ivp, identical accuracy at dt<=4ms)
         self.use_fixed_step = True
-        # Simulated IMU (with noise)
+        # Simulated IMU
         self.imu = Imu()
-        self._enable_imu_noise = True  # Always add a bit of noise to avoid stale detection
+        self._enable_imu_noise = bool(enable_imu_noise)
         self.t = 0.0
 
 
@@ -95,6 +96,7 @@ class PX4Multirotor(Multirotor):
         self._autopilot_controller = autopilot_controller
         self._lockstep_enabled = lockstep
         self._lockstep_timeout = lockstep_timeout
+        self._thrust_model_factor = float(quad_params.get('thrust_model_factor', 0.0))
         self._last_control = {'cmd_motor_speeds': np.zeros(quad_params['num_rotors'])}
 
     @staticmethod
@@ -186,7 +188,33 @@ class PX4Multirotor(Multirotor):
             while latest is None and time.perf_counter() < deadline:
                 latest = self.conn.recv_match(type='HIL_ACTUATOR_CONTROLS', blocking=True, timeout=0.01)
         if latest is not None:
-            return {'cmd_motor_speeds': [c * self.rotor_speed_max for c in latest.controls[:self.num_rotors]]}
+            motor_signals = latest.controls[:self.num_rotors]
+            motor_speeds = []
+
+            for signal in motor_signals:
+                motor_speeds.append(self._px4_motor_signal_to_speed(signal))
+
+            return {'cmd_motor_speeds': motor_speeds}
+
+    def _px4_motor_signal_to_speed(self, signal: float) -> float:
+        """Convert PX4's normalized motor signal into a rotor speed command."""
+        direction = 1.0
+        control_signal = float(signal)
+
+        if control_signal < 0.0:
+            direction = -1.0
+            control_signal = -control_signal
+
+        control_signal = min(max(control_signal, 0.0), 1.0)
+        thrust_factor = self._thrust_model_factor
+        thrust_fraction = control_signal
+
+        if thrust_factor > 0.0:
+            thrust_fraction = thrust_factor * control_signal * control_signal
+            thrust_fraction += (1.0 - thrust_factor) * control_signal
+
+        rotor_speed = math.sqrt(thrust_fraction) * self.rotor_speed_max
+        return direction * rotor_speed
 
     def _enu_to_ned_cmps(self, v_enu):
         v_n = float(v_enu[1])
@@ -300,8 +328,15 @@ class PX4Multirotor(Multirotor):
     def step(self, state, control, t_step):
         _t0 = time.perf_counter()
 
+        sensor_control = control
+
+        if self._autopilot_controller:
+            # The current state was reached using the previously applied PX4 control,
+            # so the simulated IMU must be derived from that same input.
+            sensor_control = self._last_control
+
         # Compute state derivative once for messages
-        statedot = self.statedot(state, control, 0.0)
+        statedot = self.statedot(state, sensor_control, 0.0)
 
         # Compute IMU measurements once (noisy for HIL_SENSOR, ground-truth for HIL_STATE)
         a_frd_noisy, omega_frd_noisy = self._imu(state, statedot)

@@ -2,7 +2,9 @@ import numpy as np
 
 d = 0.17 # distance from CoM to rotor (m)
 
-# 10040_sihsim_quadx preset (aligned with PX4 SIH parameters)
+# 10040_sihsim_quadx preset.
+# PX4 defines rotor positions in FRD body axes, while RotorPy expects GLU.
+# That requires mirroring the lateral coordinate (right -> negative left).
 quad_params = {
     'mass':             1.0,     # kg      (PX4 param SIH_MASS)
     'Ixx':              0.025,   # kg·m²   (PX4 param SIH_IXX)
@@ -20,8 +22,9 @@ quad_params = {
         'r4':           d*np.array([-1.0,  -1.0, 0.0]),
     },
 
-    # Sign for each motor’s yaw moment (+ CW, - CCW)
-    'rotor_directions': np.array([ -1, -1, 1, 1 ]),
+    # PX4's KM signs are defined in FRD (+z down). RotorPy applies yaw torque
+    # about +z up, so the physical spin pattern must be negated here.
+    'rotor_directions': np.array([-1, -1,  1,  1]),
     'rI':               np.array([0.0, 0.0, 0.0]),
 
     'c_Dx':             1e-2,
